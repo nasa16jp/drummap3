@@ -373,7 +373,7 @@ async function submitAuth() {
     setMsg("authMsg", jpError(e), "err");
   } finally {
     btn.disabled = false;
-    setMode(mode);
+    btn.textContent = mode === "login" ? "ログイン" : "登録メールを送る";
   }
 }
 
