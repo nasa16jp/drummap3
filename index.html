@@ -97,6 +97,36 @@
   .badge.practicing { background: rgba(90,200,250,.15); color: var(--snare); }
   .badge.almost { background: rgba(255,209,102,.15); color: var(--hat); }
   .badge.mastered { background: rgba(76,175,125,.18); color: var(--ok); }
+  /* 絞り込みチップ */
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .chip { font-size: 12px; padding: 5px 12px; border-radius: 999px;
+          border: 1px solid var(--line); color: var(--sub); cursor: pointer; }
+  .chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  /* タブ */
+  .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+  .tab { flex: 1; margin-top: 0; padding: 9px; font-size: 13px; font-weight: 600;
+         background: var(--panel2); color: var(--sub); border: 1px solid var(--line); }
+  .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  /* 練習ノート */
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .seg button { margin-top: 0; padding: 11px 6px; font-size: 13px; font-weight: 600;
+                background: var(--panel2); color: var(--sub);
+                border: 1px solid var(--line); }
+  .seg button.active { background: var(--accent); color: #fff;
+                       border-color: var(--accent); }
+  textarea { width: 100%; min-height: 72px; padding: 12px 14px; border-radius: 10px;
+             border: 1px solid var(--line); background: var(--panel2);
+             color: var(--text); font-size: 16px; outline: none; resize: vertical;
+             font-family: inherit; }
+  textarea:focus { border-color: var(--accent); }
+  .memo { padding: 11px 4px; border-bottom: 1px solid var(--line);
+          font-size: 13px; line-height: 1.6; }
+  .memo:last-child { border-bottom: none; }
+  .memo .d { font-size: 11px; color: var(--sub); }
+  .memo .x { float: right; color: var(--err); cursor: pointer; font-size: 12px;
+             padding: 0 4px; opacity: 0.8; }
+  .danger { color: var(--err) !important;
+            border-color: rgba(255,92,116,.4) !important; margin-top: 22px; }
   /* 解析進捗 */
   .progress-box { text-align: center; padding: 24px 8px; }
   .progress-box .big { font-size: 15px; margin: 14px 0 6px; }
@@ -168,6 +198,13 @@
     <button onclick="openAnalyze()">+ 新しい曲を解析</button>
     <div class="card" style="margin-top:16px">
       <h2>マイ曲リスト</h2>
+      <div class="chips" id="filterChips">
+        <span class="chip active" data-f="all">全部</span>
+        <span class="chip" data-f="not_started">未着手</span>
+        <span class="chip" data-f="practicing">練習中</span>
+        <span class="chip" data-f="almost">だいたい叩ける</span>
+        <span class="chip" data-f="mastered">完成</span>
+      </div>
       <div id="songList">
         <div class="placeholder">読み込み中...</div>
       </div>
@@ -204,18 +241,39 @@
         <div class="title" id="scoreTitle">曲名</div>
         <div class="bpm" id="scoreBpm">BPM --</div>
       </div>
-      <div class="legend">
-        <i style="background:var(--hat)"></i>ハイハット(輪=オープン)
-        <i style="background:var(--snare)"></i>スネア
-        <i style="background:var(--accent)"></i>キック
-        &nbsp;|&nbsp; タップで移動
+      <div class="tabs">
+        <button class="tab active" id="tabScore" onclick="setTab('score')">譜面</button>
+        <button class="tab" id="tabNote" onclick="setTab('note')">練習ノート</button>
       </div>
-      <canvas id="scoreCanvas"></canvas>
-      <div class="controls">
-        <button id="btnPlay" onclick="togglePlay()">▶ 再生</button>
+      <div id="paneScore">
+        <div class="legend">
+          <i style="background:var(--hat)"></i>ハイハット(輪=オープン)
+          <i style="background:var(--snare)"></i>スネア
+          <i style="background:var(--accent)"></i>キック
+          &nbsp;|&nbsp; タップで移動
+        </div>
+        <canvas id="scoreCanvas"></canvas>
+        <div class="controls">
+          <button id="btnPlay" onclick="togglePlay()">▶ 再生</button>
+          <button class="ghost" onclick="goHome()">ホームに戻る</button>
+        </div>
+        <input id="audioReInput" type="file" accept="audio/*,.mp3,.m4a,.wav" style="display:none">
+      </div>
+      <div id="paneNote" class="hidden">
+        <label>練習ステータス(タップで変更)</label>
+        <div class="seg" id="segStatus">
+          <button data-s="not_started" onclick="setStatus('not_started')">未着手</button>
+          <button data-s="practicing" onclick="setStatus('practicing')">練習中</button>
+          <button data-s="almost" onclick="setStatus('almost')">だいたい叩ける</button>
+          <button data-s="mastered" onclick="setStatus('mastered')">完成</button>
+        </div>
+        <label>練習メモ</label>
+        <textarea id="memoInput" placeholder="例: サビのキックが走りがち。BPM90から練習"></textarea>
+        <button onclick="addMemo()">メモを追加</button>
+        <div id="memoList" style="margin-top:14px"></div>
+        <button class="ghost danger" onclick="deleteSong()">この曲を削除する</button>
         <button class="ghost" onclick="goHome()">ホームに戻る</button>
       </div>
-      <input id="audioReInput" type="file" accept="audio/*,.mp3,.m4a,.wav" style="display:none">
       <div id="scoreMsg" class="msg"></div>
     </div>
   </div>
@@ -317,9 +375,12 @@ async function updatePassword() {
          setTimeout(enterHome, 800); }
 }
 
+let userId = null;
+
 async function enterHome() {
   const { data: { user } } = await sb.auth.getUser();
   if (!user) { show("viewAuth"); return; }
+  userId = user.id;
   el("userEmail").textContent = user.email;
   show("viewHome");
   refreshQuota();
@@ -332,6 +393,9 @@ const STATUS_LABELS = {
   almost: "だいたい叩ける", mastered: "完成",
 };
 
+let songCache = [];
+let songFilter = "all";
+
 async function loadSongs() {
   const box = el("songList");
   const { data, error } = await sb.from("analyses")
@@ -342,13 +406,25 @@ async function loadSongs() {
     box.innerHTML = '<div class="placeholder">読み込みに失敗しました</div>';
     return;
   }
-  if (!data.length) {
+  songCache = data;
+  renderSongs();
+}
+
+function renderSongs() {
+  const box = el("songList");
+  const list = songFilter === "all" ? songCache
+    : songCache.filter(s => s.practice_status === songFilter);
+  if (!songCache.length) {
     box.innerHTML = '<div class="placeholder">まだ曲がありません<br>' +
       '「+ 新しい曲を解析」から始めましょう</div>';
     return;
   }
+  if (!list.length) {
+    box.innerHTML = '<div class="placeholder">このステータスの曲はありません</div>';
+    return;
+  }
   box.innerHTML = "";
-  for (const s of data) {
+  for (const s of list) {
     const div = document.createElement("div");
     div.className = "song";
     const date = new Date(s.created_at).toLocaleDateString("ja-JP",
@@ -364,15 +440,25 @@ async function loadSongs() {
   }
 }
 
+el("filterChips").addEventListener("click", (ev) => {
+  const chip = ev.target.closest(".chip");
+  if (!chip) return;
+  songFilter = chip.dataset.f;
+  for (const c of el("filterChips").children)
+    c.classList.toggle("active", c === chip);
+  renderSongs();
+});
+
 async function openFromHistory(id) {
   const { data, error } = await sb.from("analyses")
-    .select("id,title,bpm,notes_json,beats_json")
+    .select("id,title,bpm,notes_json,beats_json,practice_status")
     .eq("id", id).single();
   if (error || !data) return;
   if (current && current.audioUrl) URL.revokeObjectURL(current.audioUrl);
   current = {
     analysisId: data.id, title: data.title, bpm: data.bpm,
     notes: data.notes_json || [], beats: data.beats_json || [],
+    practiceStatus: data.practice_status || "not_started",
     audioUrl: null,
   };
   openScore();
@@ -496,6 +582,7 @@ async function startAnalysis() {
       analysisId, title,
       bpm: result.bpm,
       notes, beats: result.beats,
+      practiceStatus: "not_started",
       audioUrl: URL.createObjectURL(pickedFile),
     };
     refreshQuota();
@@ -522,12 +609,90 @@ function openScore() {
   setMsg("scoreMsg", "", "");
   player.src = current.audioUrl || "";
   el("btnPlay").textContent = "▶ 再生";
+  setTab("score");
+  renderStatusSeg();
+  loadMemos();
   show("viewScore");
   if (!current.beats || current.beats.length < 2) {
     setMsg("scoreMsg", "この曲の譜面データが読み込めませんでした", "err");
     return;
   }
   requestAnimationFrame(() => { buildLayout(); drawScore(); });
+}
+
+// ================= 練習ノート =================
+function setTab(t) {
+  el("tabScore").classList.toggle("active", t === "score");
+  el("tabNote").classList.toggle("active", t === "note");
+  el("paneScore").classList.toggle("hidden", t !== "score");
+  el("paneNote").classList.toggle("hidden", t !== "note");
+  if (t === "note") stopPlay();
+  if (t === "score" && layout) drawScore();
+}
+
+function renderStatusSeg() {
+  for (const b of el("segStatus").children)
+    b.classList.toggle("active", b.dataset.s === current.practiceStatus);
+}
+
+async function setStatus(s) {
+  current.practiceStatus = s;
+  renderStatusSeg();
+  const { error } = await sb.from("analyses")
+    .update({ practice_status: s }).eq("id", current.analysisId);
+  if (error) setMsg("scoreMsg", "ステータスの保存に失敗しました", "err");
+}
+
+async function loadMemos() {
+  const box = el("memoList");
+  box.innerHTML = "";
+  const { data, error } = await sb.from("practice_notes")
+    .select("id,body,created_at")
+    .eq("analysis_id", current.analysisId)
+    .order("created_at", { ascending: false });
+  if (error || !data) return;
+  if (!data.length) {
+    box.innerHTML = '<div class="placeholder">まだメモがありません</div>';
+    return;
+  }
+  for (const m of data) {
+    const div = document.createElement("div");
+    div.className = "memo";
+    const d = new Date(m.created_at);
+    const ds = d.toLocaleDateString("ja-JP",
+      { month: "numeric", day: "numeric" }) + " " +
+      d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+    div.innerHTML = '<span class="x">削除</span><div class="d">' + ds +
+                    '</div><div class="b"></div>';
+    div.querySelector(".b").textContent = m.body;
+    div.querySelector(".x").onclick = () => deleteMemo(m.id);
+    box.appendChild(div);
+  }
+}
+
+async function addMemo() {
+  const body = el("memoInput").value.trim();
+  if (!body) return;
+  const { error } = await sb.from("practice_notes").insert(
+    { analysis_id: current.analysisId, user_id: userId, body });
+  if (error) { setMsg("scoreMsg", "メモの保存に失敗しました", "err"); return; }
+  el("memoInput").value = "";
+  loadMemos();
+}
+
+async function deleteMemo(id) {
+  await sb.from("practice_notes").delete().eq("id", id);
+  loadMemos();
+}
+
+async function deleteSong() {
+  if (!confirm("この曲を削除しますか?\n" +
+               "(削除しても今月の解析回数は元に戻りません)")) return;
+  const { error } = await sb.from("analyses")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", current.analysisId);
+  if (error) { setMsg("scoreMsg", "削除に失敗しました", "err"); return; }
+  goHome();
 }
 
 // 音符の時刻 → 16分グリッド位置(グローバルセル番号)
