@@ -15,6 +15,7 @@
     --accent: #ff6b35;
     --accent2: #ffa26b;
     --snare: #5ac8fa;
+    --hat: #ffd166;
     --ok: #4caf7d;
     --err: #ff5c74;
     --line: #2c3547;
@@ -191,9 +192,10 @@
         <div class="bpm" id="scoreBpm">BPM --</div>
       </div>
       <div class="legend">
+        <i style="background:var(--hat)"></i>ハイハット(輪=オープン)
         <i style="background:var(--snare)"></i>スネア
         <i style="background:var(--accent)"></i>キック
-        &nbsp;|&nbsp; タップで再生位置を移動
+        &nbsp;|&nbsp; タップで移動
       </div>
       <canvas id="scoreCanvas"></canvas>
       <div class="controls">
@@ -408,10 +410,10 @@ async function startAnalysis() {
       if (elapsed > 600) throw new Error("時間切れです。もう一度お試しください");
     }
 
-    // 4. キック・スネアだけに絞る (GM: 35/36=キック, 38/40=スネア)
-    const KICK = [35, 36], SNARE = [38, 40];
-    const notes = (result.notes || []).filter(
-      n => KICK.includes(n[1]) || SNARE.includes(n[1]));
+    // 4. キック・スネア・ハイハットに絞る
+    //    (GM: 35/36=キック, 38/40=スネア, 42=閉ハット, 46=開ハット)
+    const KEEP = [35, 36, 38, 40, 42, 46];
+    const notes = (result.notes || []).filter(n => KEEP.includes(n[1]));
 
     // 5. 結果をクラウドに保存
     setProgress("保存中...", "");
@@ -473,25 +475,31 @@ function buildLayout() {
   const nBeats = beats.length;
   const nMeasures = Math.ceil(nBeats / 4);
   const W = cv.clientWidth || cv.parentElement.clientWidth;
-  const labelW = 0;
+  const labelW = 22;
   // 1行に入れる小節数: セル幅がスマホでも押しやすいサイズになるように
   const mpl = W >= 520 ? 2 : 1;
   const cellW = (W - labelW - 8) / (16 * mpl);
-  const rowH = 22, rowGap = 6, lineGap = 26, topPad = 8;
-  const lineH = rowH * 2 + rowGap + lineGap;
+  const nRows = 3;  // 0=ハイハット 1=スネア 2=キック
+  const rowH = 20, rowGap = 5, lineGap = 26, topPad = 8;
+  const gridH = rowH * nRows + rowGap * (nRows - 1);
+  const lineH = gridH + lineGap;
   const nLines = Math.ceil(nMeasures / mpl);
   const H = topPad + nLines * lineH + 10;
   const dpr = window.devicePixelRatio || 1;
   cv.width = W * dpr; cv.height = H * dpr;
   cv.style.height = H + "px";
-  layout = { W, H, dpr, mpl, cellW, rowH, rowGap, lineGap, lineH,
-             topPad, nMeasures, nLines, labelW };
+  layout = { W, H, dpr, mpl, cellW, nRows, rowH, rowGap, gridH,
+             lineGap, lineH, topPad, nMeasures, nLines, labelW };
 
-  // 各音符のセル位置を前計算
-  layout.cells = current.notes.map(n => ({
-    cell: noteToCell(n[0], beats),
-    kick: n[1] === 35 || n[1] === 36,
-  }));
+  // 各音符のセル位置・段を前計算
+  layout.cells = current.notes.map(n => {
+    const p = n[1];
+    return {
+      cell: noteToCell(n[0], beats),
+      row: (p === 42 || p === 46) ? 0 : (p === 38 || p === 40) ? 1 : 2,
+      open: p === 46,
+    };
+  });
 }
 
 function cellXY(gcell) {
@@ -515,8 +523,13 @@ function drawScore(cursorCell) {
   const css = getComputedStyle(document.documentElement);
   const cLine = css.getPropertyValue("--line").trim();
   const cSub = css.getPropertyValue("--sub").trim();
-  const cKick = css.getPropertyValue("--accent").trim();
-  const cSnare = css.getPropertyValue("--snare").trim();
+  const ROW_COLORS = [
+    css.getPropertyValue("--hat").trim(),
+    css.getPropertyValue("--snare").trim(),
+    css.getPropertyValue("--accent").trim(),
+  ];
+  const ROW_LABELS = ["ハ", "ス", "キ"];
+  const rowY = (yTop, row) => yTop + row * (L.rowH + L.rowGap);
 
   // グリッド線
   for (let m = 0; m < L.nMeasures; m++) {
@@ -530,18 +543,19 @@ function drawScore(cursorCell) {
       ctx.lineWidth = (c === 0 || c === 16) ? 1.6 : 1;
       ctx.beginPath();
       ctx.moveTo(xx, yTop);
-      ctx.lineTo(xx, yTop + L.rowH * 2 + L.rowGap);
+      ctx.lineTo(xx, yTop + L.gridH);
       ctx.stroke();
     }
-    // 横線(スネア行/キック行)
+    // 横線(各段の上下)
     const { x: x0, yTop } = cellXY(m * 16);
     const x1 = cellXY(m * 16 + 15).x + L.cellW;
     ctx.globalAlpha = 0.35;
     ctx.strokeStyle = cLine;
     ctx.lineWidth = 1;
-    for (const yy of [yTop, yTop + L.rowH, yTop + L.rowH + L.rowGap,
-                      yTop + L.rowH * 2 + L.rowGap]) {
-      ctx.beginPath(); ctx.moveTo(x0, yy); ctx.lineTo(x1, yy); ctx.stroke();
+    for (let rr = 0; rr < L.nRows; rr++) {
+      for (const yy of [rowY(yTop, rr), rowY(yTop, rr) + L.rowH]) {
+        ctx.beginPath(); ctx.moveTo(x0, yy); ctx.lineTo(x1, yy); ctx.stroke();
+      }
     }
     // 小節番号
     ctx.globalAlpha = 0.7;
@@ -551,18 +565,35 @@ function drawScore(cursorCell) {
   }
   ctx.globalAlpha = 1;
 
-  // 音符
-  const r = Math.min(7, L.cellW * 0.32);
+  // 行ラベル(各行の左端: ハ/ス/キ)
+  ctx.font = "10px sans-serif";
+  for (let line = 0; line < L.nLines; line++) {
+    const yTop = L.topPad + line * L.lineH;
+    for (let rr = 0; rr < L.nRows; rr++) {
+      ctx.fillStyle = ROW_COLORS[rr];
+      ctx.globalAlpha = 0.85;
+      ctx.fillText(ROW_LABELS[rr], 4, rowY(yTop, rr) + L.rowH / 2 + 3.5);
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // 音符 (オープンハイハットは輪で描く)
+  const r = Math.min(6.5, L.cellW * 0.32);
   for (const n of layout.cells) {
     if (n.cell >= L.nMeasures * 16) continue;
     const { x, yTop } = cellXY(n.cell);
     const cx = x + L.cellW / 2;
-    const cy = n.kick ? yTop + L.rowH + L.rowGap + L.rowH / 2
-                      : yTop + L.rowH / 2;
-    ctx.fillStyle = n.kick ? cKick : cSnare;
+    const cy = rowY(yTop, n.row) + L.rowH / 2;
     ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.arc(cx, cy, n.open ? r - 1 : r, 0, Math.PI * 2);
+    if (n.open) {
+      ctx.strokeStyle = ROW_COLORS[n.row];
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = ROW_COLORS[n.row];
+      ctx.fill();
+    }
   }
 
   // 再生カーソル
@@ -577,7 +608,7 @@ function drawScore(cursorCell) {
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(cx, yTop - 4);
-      ctx.lineTo(cx, yTop + L.rowH * 2 + L.rowGap + 4);
+      ctx.lineTo(cx, yTop + L.gridH + 4);
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
