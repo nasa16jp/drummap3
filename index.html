@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>DrumMap3 — AI下書きドラム譜 + 練習ノート</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.2/build/cjs/vexflow.js"></script>
 <style>
   :root {
     --bg: #0f1218;
@@ -107,6 +108,16 @@
   .tab { flex: 1; margin-top: 0; padding: 9px; font-size: 13px; font-weight: 600;
          background: var(--panel2); color: var(--sub); border: 1px solid var(--line); }
   .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  /* グリッド/五線譜 切替 */
+  .vrow { display: flex; gap: 8px; margin-bottom: 10px; }
+  .vbtn { flex: 1; margin-top: 0; padding: 8px; font-size: 12px; font-weight: 600;
+          background: var(--panel2); color: var(--sub);
+          border: 1px solid var(--line); }
+  .vbtn.active { color: var(--accent2); border-color: var(--accent); }
+  #sheetWrap { position: relative; background: #fff; border-radius: 10px;
+               overflow-x: auto; }
+  #sheetCursor { display: none; position: absolute; width: 2px;
+                 background: var(--accent); pointer-events: none; }
   /* 練習ノート */
   .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .seg button { margin-top: 0; padding: 11px 6px; font-size: 13px; font-weight: 600;
@@ -246,13 +257,21 @@
         <button class="tab" id="tabNote" onclick="setTab('note')">練習ノート</button>
       </div>
       <div id="paneScore">
-        <div class="legend">
+        <div class="vrow">
+          <button class="vbtn active" id="vGrid" onclick="setScoreView('grid')">グリッド</button>
+          <button class="vbtn" id="vSheet" onclick="setScoreView('sheet')">五線譜</button>
+        </div>
+        <div class="legend" id="gridLegend">
           <i style="background:var(--hat)"></i>ハイハット(輪=オープン)
           <i style="background:var(--snare)"></i>スネア
           <i style="background:var(--accent)"></i>キック
           &nbsp;|&nbsp; タップで移動
         </div>
         <canvas id="scoreCanvas"></canvas>
+        <div id="sheetWrap" class="hidden">
+          <div id="sheetOut"></div>
+          <div id="sheetCursor"></div>
+        </div>
         <div class="controls">
           <button id="btnPlay" onclick="togglePlay()">▶ 再生</button>
           <button class="ghost" onclick="goHome()">ホームに戻る</button>
@@ -656,6 +675,9 @@ function openScore() {
   setMsg("scoreMsg", "", "");
   player.src = current.audioUrl || "";
   el("btnPlay").textContent = "▶ 再生";
+  sheetS.built = false;
+  el("sheetOut").innerHTML = "";
+  setScoreView("grid");
   setTab("score");
   renderStatusSeg();
   loadMemos();
@@ -922,7 +944,8 @@ function cellToTime(gcell) {
 
 function tick() {
   if (!player.paused) {
-    drawScore(timeToCell(player.currentTime));
+    if (scoreView === "sheet") setSheetPlayhead(player.currentTime);
+    else drawScore(timeToCell(player.currentTime));
     rafId = requestAnimationFrame(tick);
   }
 }
@@ -949,7 +972,8 @@ function stopPlay() {
   player.pause();
   el("btnPlay").textContent = "▶ 再生";
   if (rafId) cancelAnimationFrame(rafId);
-  if (layout) drawScore();
+  el("sheetCursor").style.display = "none";
+  if (layout && scoreView === "grid") drawScore();
 }
 
 player.addEventListener("ended", stopPlay);
@@ -983,7 +1007,236 @@ cv.addEventListener("click", (ev) => {
 
 window.addEventListener("resize", () => {
   if (current && !el("viewScore").classList.contains("hidden")) {
-    buildLayout(); drawScore();
+    if (scoreView === "sheet") { sheetS.built = false; renderSheet(); }
+    else { buildLayout(); drawScore(); }
+  }
+});
+
+// ================= 五線譜表示 (VexFlow / 既存DrumMapから移植) =================
+let scoreView = "grid";
+const sheetS = { x0: 10, y0: 10, rowH: 110, mW: 0, nsxs: [], anchors: [],
+                 nMeasures: 0, built: false, lastM: -1 };
+
+function setScoreView(v) {
+  scoreView = v;
+  el("vGrid").classList.toggle("active", v === "grid");
+  el("vSheet").classList.toggle("active", v === "sheet");
+  el("scoreCanvas").classList.toggle("hidden", v !== "grid");
+  el("gridLegend").classList.toggle("hidden", v !== "grid");
+  el("sheetWrap").classList.toggle("hidden", v !== "sheet");
+  if (v === "sheet" && current && !sheetS.built) renderSheet();
+  if (v === "grid" && layout) drawScore();
+}
+
+// 時刻(秒) ⇔ 16分スロット位置の相互変換
+function slotFOf(t) {
+  const beats = current.beats;
+  const d16 = (60 / (current.bpm || 120)) / 4;
+  if (!beats || beats.length < 2) return t / d16;
+  if (t <= beats[0]) {
+    const ibi0 = beats[1] - beats[0];
+    const v = (t - beats[0]) / ibi0 * 4;
+    return v < -0.49 ? v : Math.max(v, -0.49);
+  }
+  let lo = 0, hi = beats.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (beats[mid] <= t) lo = mid; else hi = mid - 1;
+  }
+  const next = (lo + 1 < beats.length) ? beats[lo + 1]
+             : beats[lo] + (beats[lo] - beats[lo - 1]);
+  return lo * 4 + (t - beats[lo]) / (next - beats[lo]) * 4;
+}
+
+function timeOfSlotF(slotF) {
+  const beats = current.beats;
+  const d16 = (60 / (current.bpm || 120)) / 4;
+  if (!beats || beats.length < 2) return slotF * d16;
+  const bi = slotF / 4, b0 = Math.floor(bi);
+  if (b0 < 0) return beats[0];
+  if (b0 >= beats.length - 1) {
+    const ibiL = beats[beats.length - 1] - beats[beats.length - 2];
+    return beats[beats.length - 1] + (bi - (beats.length - 1)) * ibiL;
+  }
+  return beats[b0] + (bi - b0) * (beats[b0 + 1] - beats[b0]);
+}
+
+// MIDIピッチ → 五線譜上の位置(日本式: キック=下、スネア=3間、ハット=×)
+function mapKey(p) {
+  let o;
+  if (p === 35 || p === 36) o = { key: "f/4" };
+  else if (p === 38 || p === 40) o = { key: "c/5" };
+  else if (p === 42) o = { key: "g/5/x2" };
+  else if (p === 46) o = { key: "g/5/x2", open: true };
+  else o = { key: "e/5" };
+  o.pitch = p;
+  return o;
+}
+
+function renderSheet() {
+  const VF = Vex.Flow;
+  const S = sheetS;
+  const div = el("sheetOut");
+  div.innerHTML = "";
+  const slots = {};
+  let maxSlot = 0;
+  for (const n of current.notes) {
+    let s = Math.round(slotFOf(n[0]));
+    if (s < 0) s = 0;
+    if (s > maxSlot) maxSlot = s;
+    (slots[s] = slots[s] || []).push(mapKey(n[1]));
+  }
+  S.nMeasures = Math.min(200, Math.floor(maxSlot / 16) + 1);
+  S.mW = Math.min(1000, Math.max(300, el("sheetWrap").clientWidth - 30));
+  const renderer = new VF.Renderer(div, VF.Renderer.Backends.SVG);
+  renderer.resize(S.x0 + S.mW + 16, S.y0 + S.nMeasures * S.rowH + 30);
+  const ctx = renderer.getContext();
+  const isKick = p => p === 35 || p === 36;
+
+  function buildBeat(m, b, wantKick, stemDir, restKey, anchors) {
+    const out = [], local = [];
+    for (let j = 0; j < 4; j++) {
+      const hits = slots[m * 16 + b * 4 + j] || null;
+      if (hits) {
+        const f = hits.filter(h => isKick(h.pitch) === wantKick);
+        local.push(f.length ? f : null);
+      } else local.push(null);
+    }
+    let pos = 0;
+    while (pos < 4) {
+      let next = 4;
+      for (let j2 = pos + 1; j2 < 4; j2++) { if (local[j2]) { next = j2; break; } }
+      const len = next - pos;
+      if (local[pos]) {
+        const seen = {}, keys = [];
+        let open = false;
+        for (const h of local[pos]) {
+          if (!seen[h.key]) { seen[h.key] = 1; keys.push(h.key); }
+          if (h.open) open = true;
+        }
+        const dur = (len === 1) ? "16" : (len === 2) ? "8" : (len === 3) ? "8d" : "q";
+        const sn = new VF.StaveNote({ keys, duration: dur, stem_direction: stemDir });
+        if (len === 3) VF.Dot.buildAndAttach([sn], { all: true });
+        if (open) sn.addModifier(new VF.Annotation("o")
+          .setVerticalJustification(VF.Annotation.VerticalJustify.TOP), 0);
+        out.push(sn);
+        if (anchors) anchors.push({ s: b * 4 + pos, note: sn });
+        pos += len;
+      } else {
+        if (len === 4) { out.push(new VF.StaveNote({ keys: [restKey], duration: "qr" })); pos += 4; }
+        else if (len >= 2) { out.push(new VF.StaveNote({ keys: [restKey], duration: "8r" })); pos += 2; }
+        else { out.push(new VF.StaveNote({ keys: [restKey], duration: "16r" })); pos += 1; }
+      }
+    }
+    return out;
+  }
+
+  S.nsxs = []; S.anchors = [];
+  for (let m = 0; m < S.nMeasures; m++) {
+    const y = S.y0 + m * S.rowH;
+    const stave = new VF.Stave(S.x0, y, S.mW);
+    stave.addClef("percussion");
+    if (m === 0) stave.addTimeSignature("4/4");
+    stave.setMeasure(m + 1);
+    stave.setContext(ctx).draw();
+    S.nsxs.push(stave.getNoteStartX());
+    const upper = [], lower = [], anchors = [];
+    for (let b = 0; b < 4; b++) {
+      upper.push(...buildBeat(m, b, false, 1, "b/4", anchors));
+      lower.push(...buildBeat(m, b, true, -1, "d/4", anchors));
+    }
+    const v1 = new VF.Voice({ num_beats: 4, beat_value: 4 }).setStrict(false).addTickables(upper);
+    const v2 = new VF.Voice({ num_beats: 4, beat_value: 4 }).setStrict(false).addTickables(lower);
+    const beamsUp = VF.Beam.generateBeams(upper, { stem_direction: 1 });
+    const beamsDown = VF.Beam.generateBeams(lower, { stem_direction: -1 });
+    new VF.Formatter().joinVoices([v1, v2]).formatToStave([v1, v2], stave, { align_rests: false });
+    v1.draw(ctx, stave); v2.draw(ctx, stave);
+    beamsUp.forEach(bm => bm.setContext(ctx).draw());
+    beamsDown.forEach(bm => bm.setContext(ctx).draw());
+    anchors.sort((a, b) => a.s - b.s);
+    const pts = [];
+    for (const a of anchors) {
+      let xx;
+      try { xx = a.note.getAbsoluteX(); } catch (e2) { continue; }
+      if (pts.length && pts[pts.length - 1].s === a.s) continue;
+      pts.push({ s: a.s, x: xx });
+    }
+    S.anchors.push(pts);
+  }
+  S.built = true;
+  S.lastM = -1;
+}
+
+function routeOf(m) {
+  const S = sheetS;
+  const startX = S.nsxs[m] || (S.x0 + 60);
+  const endX = S.x0 + S.mW - 3;
+  const route = [{ s: 0, x: startX }];
+  for (const p of (S.anchors[m] || [])) {
+    if (p.s <= 0) route[0] = { s: 0, x: p.x };
+    else route.push(p);
+  }
+  route.push({ s: 16, x: endX });
+  return route;
+}
+
+function setSheetPlayhead(t) {
+  const S = sheetS, c = el("sheetCursor");
+  if (t < 0 || !S.nMeasures || !S.built) { c.style.display = "none"; S.lastM = -1; return; }
+  let slotF = slotFOf(t);
+  if (slotF < 0) slotF = 0;
+  const m = Math.floor(slotF / 16);
+  if (m >= S.nMeasures) { c.style.display = "none"; return; }
+  let f = slotF - m * 16;
+  if (f < 0) f = 0;
+  const route = routeOf(m);
+  let left = route[route.length - 1].x;
+  for (let ri = 0; ri < route.length - 1; ri++) {
+    if (f >= route[ri].s && f <= route[ri + 1].s) {
+      const span = route[ri + 1].s - route[ri].s || 1;
+      left = route[ri].x + (f - route[ri].s) / span * (route[ri + 1].x - route[ri].x);
+      break;
+    }
+  }
+  const topLocal = S.y0 + m * S.rowH + 15;
+  c.style.display = "block";
+  c.style.left = left + "px";
+  c.style.top = topLocal + "px";
+  c.style.height = "85px";
+  // 再生中の小節が見えるように自動スクロール
+  if (m !== S.lastM) {
+    S.lastM = m;
+    const wrap = el("sheetWrap");
+    const absTop = wrap.getBoundingClientRect().top + window.scrollY + topLocal;
+    window.scrollTo({ top: Math.max(0, absTop - 240), behavior: "smooth" });
+  }
+}
+
+// 五線譜のクリックでシーク
+el("sheetWrap").addEventListener("click", (ev) => {
+  const S = sheetS;
+  if (!S.built || !current) return;
+  const rect = el("sheetWrap").getBoundingClientRect();
+  const xx = ev.clientX - rect.left + el("sheetWrap").scrollLeft;
+  const yy = ev.clientY - rect.top;
+  const m = Math.floor((yy - S.y0) / S.rowH);
+  if (m < 0 || m >= S.nMeasures) return;
+  const route = routeOf(m);
+  let f = 0;
+  const endX = route[route.length - 1].x;
+  if (xx >= endX) f = 16;
+  else if (xx > route[0].x) {
+    for (let ri = 0; ri < route.length - 1; ri++) {
+      if (xx >= route[ri].x && xx <= route[ri + 1].x) {
+        const span = route[ri + 1].x - route[ri].x || 1;
+        f = route[ri].s + (xx - route[ri].x) / span * (route[ri + 1].s - route[ri].s);
+        break;
+      }
+    }
+  }
+  if (current.audioUrl) {
+    player.currentTime = Math.max(0, timeOfSlotF(m * 16 + f));
+    setSheetPlayhead(player.currentTime);
   }
 });
 
