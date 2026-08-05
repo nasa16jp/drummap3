@@ -83,6 +83,20 @@
     text-align: center; color: var(--sub); font-size: 13px; cursor: pointer;
   }
   .drop.has { border-color: var(--accent); color: var(--text); }
+  /* 曲リスト */
+  .song { display: flex; justify-content: space-between; align-items: center;
+          gap: 10px; padding: 13px 4px; border-bottom: 1px solid var(--line);
+          cursor: pointer; }
+  .song:last-child { border-bottom: none; }
+  .song .t { font-size: 14px; font-weight: 600; overflow: hidden;
+             text-overflow: ellipsis; white-space: nowrap; }
+  .song .d { font-size: 11px; color: var(--sub); margin-top: 3px; }
+  .badge { font-size: 11px; padding: 4px 10px; border-radius: 999px;
+           white-space: nowrap; }
+  .badge.not_started { background: #2c3547; color: var(--sub); }
+  .badge.practicing { background: rgba(90,200,250,.15); color: var(--snare); }
+  .badge.almost { background: rgba(255,209,102,.15); color: var(--hat); }
+  .badge.mastered { background: rgba(76,175,125,.18); color: var(--ok); }
   /* 解析進捗 */
   .progress-box { text-align: center; padding: 24px 8px; }
   .progress-box .big { font-size: 15px; margin: 14px 0 6px; }
@@ -154,9 +168,8 @@
     <button onclick="openAnalyze()">+ 新しい曲を解析</button>
     <div class="card" style="margin-top:16px">
       <h2>マイ曲リスト</h2>
-      <div class="placeholder">
-        履歴の一覧表示は Phase 3 で追加されます<br>
-        (解析結果はすでにクラウドに保存されています)
+      <div id="songList">
+        <div class="placeholder">読み込み中...</div>
       </div>
     </div>
   </div>
@@ -202,6 +215,7 @@
         <button id="btnPlay" onclick="togglePlay()">▶ 再生</button>
         <button class="ghost" onclick="goHome()">ホームに戻る</button>
       </div>
+      <input id="audioReInput" type="file" accept="audio/*,.mp3,.m4a,.wav" style="display:none">
       <div id="scoreMsg" class="msg"></div>
     </div>
   </div>
@@ -309,6 +323,59 @@ async function enterHome() {
   el("userEmail").textContent = user.email;
   show("viewHome");
   refreshQuota();
+  loadSongs();
+}
+
+// ================= 曲リスト(履歴) =================
+const STATUS_LABELS = {
+  not_started: "未着手", practicing: "練習中",
+  almost: "だいたい叩ける", mastered: "完成",
+};
+
+async function loadSongs() {
+  const box = el("songList");
+  const { data, error } = await sb.from("analyses")
+    .select("id,title,practice_status,created_at")
+    .eq("status", "done").is("deleted_at", null)
+    .order("created_at", { ascending: false });
+  if (error) {
+    box.innerHTML = '<div class="placeholder">読み込みに失敗しました</div>';
+    return;
+  }
+  if (!data.length) {
+    box.innerHTML = '<div class="placeholder">まだ曲がありません<br>' +
+      '「+ 新しい曲を解析」から始めましょう</div>';
+    return;
+  }
+  box.innerHTML = "";
+  for (const s of data) {
+    const div = document.createElement("div");
+    div.className = "song";
+    const date = new Date(s.created_at).toLocaleDateString("ja-JP",
+      { year: "numeric", month: "numeric", day: "numeric" });
+    div.innerHTML =
+      '<div style="min-width:0"><div class="t"></div>' +
+      '<div class="d">' + date + ' 解析</div></div>' +
+      '<span class="badge ' + s.practice_status + '">' +
+      (STATUS_LABELS[s.practice_status] || "") + '</span>';
+    div.querySelector(".t").textContent = s.title;
+    div.onclick = () => openFromHistory(s.id);
+    box.appendChild(div);
+  }
+}
+
+async function openFromHistory(id) {
+  const { data, error } = await sb.from("analyses")
+    .select("id,title,bpm,notes_json,beats_json")
+    .eq("id", id).single();
+  if (error || !data) return;
+  if (current && current.audioUrl) URL.revokeObjectURL(current.audioUrl);
+  current = {
+    analysisId: data.id, title: data.title, bpm: data.bpm,
+    notes: data.notes_json || [], beats: data.beats_json || [],
+    audioUrl: null,
+  };
+  openScore();
 }
 
 async function refreshQuota() {
@@ -451,11 +518,15 @@ let rafId = null;
 
 function openScore() {
   el("scoreTitle").textContent = current.title;
-  el("scoreBpm").textContent = "BPM " + Math.round(current.bpm);
+  el("scoreBpm").textContent = "BPM " + Math.round(current.bpm || 0);
   setMsg("scoreMsg", "", "");
   player.src = current.audioUrl || "";
   el("btnPlay").textContent = "▶ 再生";
   show("viewScore");
+  if (!current.beats || current.beats.length < 2) {
+    setMsg("scoreMsg", "この曲の譜面データが読み込めませんでした", "err");
+    return;
+  }
   requestAnimationFrame(() => { buildLayout(); drawScore(); });
 }
 
@@ -645,8 +716,12 @@ function tick() {
 }
 
 function togglePlay() {
-  if (!current || !current.audioUrl) {
-    setMsg("scoreMsg", "この画面での再生には元の音源が必要です(履歴からの再生はPhase 3で対応)", "err");
+  if (!current) return;
+  if (!current.audioUrl) {
+    // 履歴から開いた場合: 端末内の音源を選び直してもらう
+    setMsg("scoreMsg",
+      "再生には元の音源ファイルが必要です。端末から選択してください", "ok");
+    el("audioReInput").click();
     return;
   }
   if (player.paused) {
@@ -666,6 +741,16 @@ function stopPlay() {
 }
 
 player.addEventListener("ended", stopPlay);
+
+// 履歴から開いたときの音源選び直し
+el("audioReInput").addEventListener("change", (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  current.audioUrl = URL.createObjectURL(f);
+  player.src = current.audioUrl;
+  setMsg("scoreMsg", "", "");
+  togglePlay();
+});
 
 // 譜面タップでシーク
 cv.addEventListener("click", (ev) => {
