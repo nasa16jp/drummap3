@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>DrumMap3 — AI下書きドラム譜 + 練習ノート</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --bg: #0f1218;
+    --panel: #1a1f2b;
+    --panel2: #222938;
+    --text: #e8ecf4;
+    --sub: #8b94a7;
+    --accent: #ff6b35;
+    --accent2: #ffa26b;
+    --ok: #4caf7d;
+    --err: #ff5c74;
+    --line: #2c3547;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans",
+                 "Noto Sans JP", sans-serif;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 480px; margin: 0 auto; padding: 24px 20px 60px; }
+  .logo { text-align: center; margin: 28px 0 6px; font-size: 30px; font-weight: 800; }
+  .logo span { color: var(--accent); }
+  .tagline { text-align: center; color: var(--sub); font-size: 13px; margin-bottom: 30px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 16px; padding: 22px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 17px; margin-bottom: 16px; }
+  label { display: block; font-size: 12px; color: var(--sub); margin: 12px 0 6px; }
+  input {
+    width: 100%; padding: 12px 14px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--panel2);
+    color: var(--text); font-size: 16px; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  button {
+    width: 100%; padding: 13px; margin-top: 18px; border: none;
+    border-radius: 10px; font-size: 15px; font-weight: 700;
+    cursor: pointer; background: var(--accent); color: #fff;
+  }
+  button:active { opacity: 0.85; }
+  button.ghost {
+    background: transparent; color: var(--sub);
+    border: 1px solid var(--line); font-weight: 500;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .switch { text-align: center; margin-top: 14px; font-size: 13px; color: var(--sub); }
+  .switch a { color: var(--accent2); cursor: pointer; text-decoration: none; }
+  .msg {
+    display: none; margin-top: 14px; padding: 12px 14px;
+    border-radius: 10px; font-size: 13px; line-height: 1.6;
+  }
+  .msg.err { display: block; background: rgba(255,92,116,.12); color: var(--err); }
+  .msg.ok { display: block; background: rgba(76,175,125,.12); color: var(--ok); }
+  .foot { text-align: center; margin-top: 24px; font-size: 11px; color: var(--sub); }
+  .foot a { color: var(--sub); }
+  /* ログイン後 */
+  .userbar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 16px; font-size: 13px; color: var(--sub);
+  }
+  .userbar b { color: var(--text); font-weight: 600; }
+  .quota {
+    display: inline-block; background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 6px 14px; font-size: 13px; margin-bottom: 14px;
+  }
+  .quota b { color: var(--accent2); }
+  .placeholder {
+    text-align: center; color: var(--sub); font-size: 13px;
+    padding: 36px 10px; border: 1px dashed var(--line); border-radius: 12px;
+  }
+  .hidden { display: none !important; }
+  .spin {
+    display: inline-block; width: 14px; height: 14px; vertical-align: -2px;
+    border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
+    border-radius: 50%; animation: sp 0.8s linear infinite; margin-right: 8px;
+  }
+  @keyframes sp { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo">Drum<span>Map</span>3</div>
+  <div class="tagline">AI下書きドラム譜 + 練習ノート(β)</div>
+
+  <!-- ===== ログイン/新規登録 ===== -->
+  <div id="viewAuth" class="hidden">
+    <div class="card">
+      <h2 id="authTitle">ログイン</h2>
+      <label>メールアドレス</label>
+      <input id="email" type="email" autocomplete="email" placeholder="you@example.com">
+      <label>パスワード</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="8文字以上">
+      <button id="btnMain" onclick="submitAuth()">ログイン</button>
+      <div id="authMsg" class="msg"></div>
+      <div class="switch" id="switchToSignup">
+        アカウントがない方は <a onclick="setMode('signup')">新規登録</a><br><br>
+        <a onclick="resetPassword()" style="color:var(--sub)">パスワードを忘れた場合</a>
+      </div>
+      <div class="switch hidden" id="switchToLogin">
+        登録済みの方は <a onclick="setMode('login')">ログイン</a>
+      </div>
+    </div>
+    <div class="foot">
+      登録すると <a href="terms.html">利用規約</a> と
+      <a href="privacy.html">プライバシーポリシー</a> に同意したものとみなされます
+    </div>
+  </div>
+
+  <!-- ===== パスワード再設定(メールのリンクから来たとき) ===== -->
+  <div id="viewRecovery" class="hidden">
+    <div class="card">
+      <h2>新しいパスワードの設定</h2>
+      <label>新しいパスワード</label>
+      <input id="newPassword" type="password" placeholder="8文字以上">
+      <button onclick="updatePassword()">パスワードを変更</button>
+      <div id="recoveryMsg" class="msg"></div>
+    </div>
+  </div>
+
+  <!-- ===== ホーム(ログイン後) ===== -->
+  <div id="viewHome" class="hidden">
+    <div class="userbar">
+      <div><b id="userEmail"></b> でログイン中</div>
+      <div><a onclick="logout()" style="color:var(--sub);cursor:pointer;text-decoration:underline">ログアウト</a></div>
+    </div>
+    <div class="quota">今月の解析: <b id="quotaText">--</b></div>
+    <div class="card">
+      <h2>マイ曲リスト</h2>
+      <div class="placeholder">
+        ログイン機能が完成しました 🎉<br><br>
+        曲のアップロードと譜面表示は<br>次のフェーズ(Phase 2)で追加されます
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== Supabase 接続(公開してよいキーのみ) =====
+const SUPABASE_URL = "https://btqbeymuftrodbbckkmh.supabase.co";
+const SUPABASE_KEY = "sb_publishable_pdPLDeJQCLbEX1ZTWuiQWw_C_IiGi0u";
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let mode = "login";  // "login" | "signup"
+
+function show(id) {
+  for (const v of ["viewAuth", "viewRecovery", "viewHome"])
+    document.getElementById(v).classList.toggle("hidden", v !== id);
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById("authTitle").textContent =
+    m === "login" ? "ログイン" : "新規登録";
+  document.getElementById("btnMain").textContent =
+    m === "login" ? "ログイン" : "登録メールを送る";
+  document.getElementById("switchToSignup").classList.toggle("hidden", m !== "login");
+  document.getElementById("switchToLogin").classList.toggle("hidden", m !== "signup");
+  setMsg("authMsg", "", "");
+}
+
+function setMsg(id, text, cls) {
+  const el = document.getElementById(id);
+  el.className = "msg" + (cls ? " " + cls : "");
+  el.innerHTML = text;
+}
+
+function jpError(e) {
+  const m = (e && e.message) || "";
+  if (m.includes("Invalid login credentials")) return "メールアドレスかパスワードが違います";
+  if (m.includes("already registered")) return "このメールアドレスは登録済みです。ログインしてください";
+  if (m.includes("at least 6")) return "パスワードは6文字以上にしてください";
+  if (m.includes("valid email")) return "メールアドレスの形式が正しくありません";
+  if (m.includes("Email not confirmed")) return "メールの確認が済んでいません。受信箱の確認リンクを開いてください";
+  if (m.includes("rate limit") || m.includes("seconds")) return "送信回数が多すぎます。少し待ってからもう一度お試しください";
+  return "エラー: " + m;
+}
+
+async function submitAuth() {
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  if (!email || !password) {
+    setMsg("authMsg", "メールアドレスとパスワードを入力してください", "err");
+    return;
+  }
+  const btn = document.getElementById("btnMain");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>処理中...';
+  try {
+    if (mode === "signup") {
+      const { data, error } = await sb.auth.signUp({ email, password });
+      if (error) throw error;
+      if (data.session) {
+        await enterHome();
+      } else {
+        setMsg("authMsg",
+          "確認メールを <b>" + email + "</b> に送りました。<br>" +
+          "メール内のリンクを開くと登録が完了します。<br>" +
+          "(迷惑メールフォルダもご確認ください)", "ok");
+      }
+    } else {
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      await enterHome();
+    }
+  } catch (e) {
+    setMsg("authMsg", jpError(e), "err");
+  } finally {
+    btn.disabled = false;
+    setMode(mode);
+  }
+}
+
+async function resetPassword() {
+  const email = document.getElementById("email").value.trim();
+  if (!email) {
+    setMsg("authMsg", "上の欄にメールアドレスを入力してから押してください", "err");
+    return;
+  }
+  const { error } = await sb.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.href.split("#")[0].split("?")[0],
+  });
+  if (error) setMsg("authMsg", jpError(error), "err");
+  else setMsg("authMsg", "再設定用のメールを送りました。リンクを開いてください", "ok");
+}
+
+async function updatePassword() {
+  const pw = document.getElementById("newPassword").value;
+  if (pw.length < 6) {
+    setMsg("recoveryMsg", "パスワードは6文字以上にしてください", "err");
+    return;
+  }
+  const { error } = await sb.auth.updateUser({ password: pw });
+  if (error) setMsg("recoveryMsg", jpError(error), "err");
+  else { setMsg("recoveryMsg", "変更しました。ホームに移動します...", "ok");
+         setTimeout(enterHome, 800); }
+}
+
+async function enterHome() {
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) { show("viewAuth"); return; }
+  document.getElementById("userEmail").textContent = user.email;
+  show("viewHome");
+  // 今月の使用数(DB関数 monthly_usage を呼ぶ)
+  try {
+    const { data, error } = await sb.rpc("monthly_usage");
+    if (!error && data !== null)
+      document.getElementById("quotaText").textContent = data + " / 3 曲";
+  } catch (e) { /* 表示だけなので失敗しても続行 */ }
+}
+
+async function logout() {
+  await sb.auth.signOut();
+  setMode("login");
+  show("viewAuth");
+}
+
+// ===== 起動時: セッション確認 + パスワード再設定リンクの検出 =====
+sb.auth.onAuthStateChange((event) => {
+  if (event === "PASSWORD_RECOVERY") show("viewRecovery");
+});
+
+(async () => {
+  const { data: { session } } = await sb.auth.getSession();
+  if (window.location.hash.includes("type=recovery")) {
+    show("viewRecovery");
+  } else if (session) {
+    await enterHome();
+  } else {
+    setMode("login");
+    show("viewAuth");
+  }
+})();
+</script>
+</body>
+</html>
