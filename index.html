@@ -192,7 +192,7 @@
   <div id="viewHome" class="hidden">
     <div class="userbar">
       <div><b id="userEmail"></b> でログイン中</div>
-      <div><a onclick="logout()">ログアウト</a></div>
+      <div><a onclick="openSettings()">⚙ 設定</a></div>
     </div>
     <div class="quota">今月の解析: <b id="quotaText">--</b></div>
     <button onclick="openAnalyze()">+ 新しい曲を解析</button>
@@ -277,6 +277,26 @@
       <div id="scoreMsg" class="msg"></div>
     </div>
   </div>
+  <!-- ===== 設定 ===== -->
+  <div id="viewSettings" class="hidden">
+    <div class="card">
+      <h2>設定</h2>
+      <label>アカウント</label>
+      <div style="font-size:14px" id="setEmail"></div>
+      <label>今月の利用状況</label>
+      <div style="font-size:14px" id="setUsage">--</div>
+      <label>規約・運営者情報</label>
+      <div style="font-size:13px;line-height:2.1">
+        <a href="terms.html" target="_blank" style="color:var(--accent2)">利用規約</a><br>
+        <a href="privacy.html" target="_blank" style="color:var(--accent2)">プライバシーポリシー</a><br>
+        <span style="color:var(--sub)">運営者: nasa ／ お問い合わせ: teppuu24@gmail.com</span>
+      </div>
+      <button class="ghost" onclick="logout()">ログアウト</button>
+      <button class="ghost danger" onclick="deleteAccount()">退会する(全データ削除)</button>
+      <button class="ghost" onclick="enterHome()">ホームに戻る</button>
+      <div id="settingsMsg" class="msg"></div>
+    </div>
+  </div>
 </div>
 
 <audio id="player"></audio>
@@ -289,7 +309,8 @@ const API = "https://teppuu24--drum3-web.modal.run";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 let mode = "login";
-const VIEWS = ["viewAuth", "viewRecovery", "viewHome", "viewAnalyze", "viewScore"];
+const VIEWS = ["viewAuth", "viewRecovery", "viewHome", "viewAnalyze",
+               "viewScore", "viewSettings"];
 
 function show(id) {
   for (const v of VIEWS)
@@ -478,6 +499,32 @@ async function logout() {
 }
 
 function goHome() { stopPlay(); enterHome(); }
+
+// ================= 設定 =================
+async function openSettings() {
+  el("setEmail").textContent = el("userEmail").textContent;
+  setMsg("settingsMsg", "", "");
+  show("viewSettings");
+  try {
+    const { data, error } = await sb.rpc("monthly_usage");
+    if (!error && data !== null)
+      el("setUsage").textContent = data + " / 3 曲(無料プラン)";
+  } catch (e) {}
+}
+
+async function deleteAccount() {
+  if (!confirm("退会すると、解析履歴・練習メモを含む全データが削除されます。\nよろしいですか?")) return;
+  if (!confirm("本当に退会しますか?\nこの操作は取り消せません。")) return;
+  const { error } = await sb.rpc("delete_account");
+  if (error) {
+    setMsg("settingsMsg", "退会処理に失敗しました: " + error.message, "err");
+    return;
+  }
+  await sb.auth.signOut();
+  setMode("login");
+  show("viewAuth");
+  setMsg("authMsg", "退会が完了しました。ご利用ありがとうございました", "ok");
+}
 
 // ================= 解析 =================
 let pickedFile = null;
