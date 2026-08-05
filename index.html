@@ -257,6 +257,8 @@
         <button class="tab" id="tabNote" onclick="setTab('note')">練習ノート</button>
       </div>
       <div id="paneScore">
+        <button id="btnPlayTop" onclick="togglePlay()"
+                style="margin-top:0;margin-bottom:12px">▶ 再生</button>
         <div class="vrow">
           <button class="vbtn active" id="vGrid" onclick="setScoreView('grid')">グリッド</button>
           <button class="vbtn" id="vSheet" onclick="setScoreView('sheet')">五線譜</button>
@@ -674,7 +676,7 @@ function openScore() {
   el("scoreBpm").textContent = "BPM " + Math.round(current.bpm || 0);
   setMsg("scoreMsg", "", "");
   player.src = current.audioUrl || "";
-  el("btnPlay").textContent = "▶ 再生";
+  setPlayLabel("▶ 再生");
   sheetS.built = false;
   el("sheetOut").innerHTML = "";
   setScoreView("grid");
@@ -961,16 +963,21 @@ function togglePlay() {
   }
   if (player.paused) {
     player.play();
-    el("btnPlay").textContent = "⏸ 一時停止";
+    setPlayLabel("⏸ 一時停止");
     rafId = requestAnimationFrame(tick);
   } else {
     stopPlay();
   }
 }
 
+function setPlayLabel(t) {
+  el("btnPlay").textContent = t;
+  el("btnPlayTop").textContent = t;
+}
+
 function stopPlay() {
   player.pause();
-  el("btnPlay").textContent = "▶ 再生";
+  setPlayLabel("▶ 再生");
   if (rafId) cancelAnimationFrame(rafId);
   el("sheetCursor").style.display = "none";
   if (layout && scoreView === "grid") drawScore();
